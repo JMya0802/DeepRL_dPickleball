@@ -6,6 +6,7 @@
    - Lose point
    - Hit the ball
    - Return the ball
+
 2. 创新结合:Curriculum Learning + ELO + Self-Play
    - 给Agent一个由简单到难的课程
    - 一开始Agent要学会打球，中期训练为了避免训练不稳定引入ELO算法:
