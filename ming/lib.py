@@ -73,5 +73,5 @@ class Simple_Random_Agent:
 class ActorModel(nn.Module):
     def __init__(self, obs_size):
         super().__init__()
-        self.
+        self.conv1 = nn.
         
