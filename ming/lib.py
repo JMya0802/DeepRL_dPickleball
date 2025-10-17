@@ -66,12 +66,22 @@ class Simple_Random_Agent:
         pass
         
     def play(self):
-        return [np.random.randint(0,2),np.random.randint(0,2),np.random.randint(0,2)]
+        return [np.random.randint(0,3),np.random.randint(0,3),np.random.randint(0,3)]
     
 
 
 class ActorModel(nn.Module):
-    def __init__(self, obs_size):
+    def __init__(self, obs_size: np.ndarray,channel_size: int):
         super().__init__()
-        self.conv1 = nn.
+        self.conv1 = nn.Conv2d(channel_size,8,kernel_size=3,padding=0,stride=1)
+        self.conv2 = nn.Conv2d
+        self.fc1 = nn.Linear(obs_size.shape[0] * obs_size.shape[1],256)
+        self.fc2 = nn.Linear(256,512)
+        self.fc3 = nn.Linear(512,256)
+        self.act = nn.ReLU()
+        
+    def forward(self,x):
+        self.x = x.view(len(x),-1)
+        self.x = self.act(self.fc1(x))
+        
         
