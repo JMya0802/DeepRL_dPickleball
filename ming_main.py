@@ -1,21 +1,21 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-import torch.distributions as distributions, OneHotCategorical
-
+# import torch.distributions as distributions, OneHotCategorical
 from tensorboardX import SummaryWriter
 import numpy as np
 import random
+import os
 
 import pickle 
 
+# fix the random seed
 def seed_np_torch(seed=306):
     random.seed(seed)
     np.random.seed(seed)
     torch.manual_seed(seed)
     torch.cuda.manual_seed(seed)
     torch.cuda.manual_seed_all(seed)
-    # some cudnn methods can be random even after fixing the seed unless you tell it to be deterministic
     torch.backends.cudnn.deterministic = True
     torch.backends.cudnn.benchmark = False
 
@@ -66,7 +66,6 @@ class MSELoss(nn.Module):
         loss = loss.sum(dim=(2,3,4)).mean()
         return loss
 
-# corresponding to L_dyn, L_rep
 class CategoricalKLDivLossWithFreeBits(nn.Module):
     def __init__(self, free_bits) -> None:
         super().__init__()
@@ -134,10 +133,6 @@ class SymLogTwoHotLoss(nn.Module):
     def decode(self, output):
         return self.symexp(F.softmax(output, dim=-1) @ self.bins)
     
-
-
-
-
 class UnityEnvWrapper:
     def __init__(self,env,training_step):
         self.env = env
@@ -179,8 +174,11 @@ class Vec_Env:
     def __init__(self):
         pass
 
-class ReplayBuffer():
+### -----------------------------------World Model-----------------------------------------------
+# Replay Buffer Class
+class ReplayBuffer:
     def __init__(self, obs_shape, num_envs, max_length=int(1E6), warmup_length=50000, store_on_gpu=False) -> None:
+        # store the data on GPU or CPU: GPU use torch, CPU use numpy 
         self.store_on_gpu = store_on_gpu
         if store_on_gpu:
             self.obs_buffer = torch.empty((max_length//num_envs, num_envs, *obs_shape), dtype=torch.uint8, device="cuda", requires_grad=False)
@@ -193,11 +191,12 @@ class ReplayBuffer():
             self.reward_buffer = np.empty((max_length//num_envs, num_envs), dtype=np.float32)
             self.termination_buffer = np.empty((max_length//num_envs, num_envs), dtype=np.float32)
 
+        
         self.length = 0
         self.num_envs = num_envs
         self.last_pointer = -1
         self.max_length = max_length
-        self.warmup_length = warmup_length
+        self.warmup_length = warmup_length 
         self.external_buffer_length = None
 
     def load_trajectory(self, path):
@@ -299,62 +298,85 @@ class ReplayBuffer():
     def __len__(self):
         return self.length * self.num_envs
 
+
 class WM_Encoder(nn.Module):
-    def __init__(self, in_channels, stem_channels, final_feature_width) -> None:
+    def __init__(self,in_channels,stem_channels) -> None:
         super().__init__()
+        self.conv1 = nn.Conv2d(in_channels = in_channels,out_channels = stem_channels, kernel_size = 4, stride = 2, padding = 1, bias = False)
+        self.bn1 = nn.BatchNorm2d(stem_channels)
+        self.relu1 = nn.ReLU(inplace=True)
+        in_channels = stem_channels
+        stem_channels = stem_channels * 2
+        
+        self.conv2 = nn.Conv2d(in_channels = in_channels,out_channels = stem_channels, kernel_size = 4, stride = 2, padding = 1, bias = False)
+        self.bn2 = nn.BatchNorm2d(stem_channels)
+        self.relu2 = nn.ReLU(inplace=True)
+        in_channels = stem_channels
+        stem_channels = stem_channels * 2
 
-        backbone = []
-        # stem
-        backbone.append(
-            nn.Conv2d(
-                in_channels=in_channels,
-                out_channels=stem_channels,
-                kernel_size=4,
-                stride=2,
-                padding=1,
-                bias=False
-            )
-        )
-        feature_width = 64//2
-        channels = stem_channels
-        backbone.append(nn.BatchNorm2d(stem_channels))
-        backbone.append(nn.ReLU(inplace=True))
+        self.conv3 = nn.Conv2d(in_channels = in_channels,out_channels = stem_channels, kernel_size = 4, stride = 2, padding = 1, bias = False)
+        self.bn3 = nn.BatchNorm2d(stem_channels)
+        self.relu3 = nn.ReLU(inplace=True)
+        in_channels = stem_channels
+        stem_channels = stem_channels * 2
 
-        # layers
-        while True:
-            backbone.append(
-                nn.Conv2d(
-                    in_channels=channels,
-                    out_channels=channels*2,
-                    kernel_size=4,
-                    stride=2,
-                    padding=1,
-                    bias=False
-                )
-            )
-            channels *= 2
-            feature_width //= 2
-            backbone.append(nn.BatchNorm2d(channels))
-            backbone.append(nn.ReLU(inplace=True))
-
-            if feature_width == final_feature_width:
-                break
-
-        self.backbone = nn.Sequential(*backbone)
-        self.last_channels = channels
-
-    def forward(self, x):
+        self.conv4 = nn.Conv2d(in_channels = in_channels,out_channels = stem_channels, kernel_size = 4, stride = 2, padding = 1, bias = False)
+        self.bn4 = nn.BatchNorm2d(stem_channels)
+        self.relu4 = nn.ReLU(inplace=True)
+        
+    def forward(self,x):
         B,L,C,H,W = x.shape
-        x = x.reshape(B*L,C,H,W)       
-        x = self.backbone(x)
-        BL, C, H, W = x.shape
+        x = x.reshape(B*L,C,H,W)
+        x = self.relu1(self.bn1(self.conv1(x))) # (BL,32,84,42)
+        x = self.relu2(self.bn2(self.conv2(x))) # (BL,64,42,21)
+        x = self.relu3(self.bn3(self.conv3(x))) # (BL,128,21,10)
+        x = self.relu4(self.bn4(self.conv4(x))) # (BL,256,10,05)
+        BL,C,H,W = x.shape
         x = x.reshape(B,L,C,H,W)
         return x
-       
+
 class WM_Decoder(nn.Module):       
-    pass
-
-
+    def __init__(self,final_feature_map):
+        self.final_feature_map = final_feature_map
+        self.storm_dim = 64
+        
+        self.fc1 = nn.Linear(4096,12800)
+        
+        in_channels = self.final_feature_map.shape[0]
+        stem_channels = in_channels // 2
+        self.deconv1 = nn.ConvTranspose2d(in_channels = in_channels ,out_channels = stem_channels, kernel_size = 4, stride = 2, padding = 1, output_padding = (0,1))
+        self.bn1 = nn.BatchNorm2d(in_channels)
+        self.relu1 = nn.ReLU(inplace=True)
+        
+        in_channels = stem_channels
+        stem_channels = stem_channels // 2
+        self.deconv2 = nn.ConvTranspose2d(in_channels = in_channels ,out_channels = stem_channels, kernel_size = 4, stride = 2, padding = 1, output_padding = (1,0))
+        self.bn2 = nn.BatchNorm2d(in_channels)
+        self.relu2 = nn.ReLU(inplace=True)
+        
+        in_channels = stem_channels
+        stem_channels = stem_channels // 2
+        self.deconv3 = nn.ConvTranspose2d(in_channels = in_channels ,out_channels = stem_channels, kernel_size = 4, stride = 2, padding = 1)
+        self.bn3 = nn.BatchNorm2d(in_channels)
+        self.relu3 = nn.ReLU(inplace=True)
+        
+        in_channels = stem_channels
+        stem_channels = stem_channels // 2
+        self.deconv4 = nn.ConvTranspose2d(in_channels = in_channels ,out_channels = stem_channels, kernel_size = 4, stride = 2, padding = 1)
+        self.bn4 = nn.BatchNorm2d(in_channels)
+        self.relu4 = nn.ReLU(inplace=True)
+        
+    def forward(self,x):
+        if x.dim() == 4:
+            B,L,CHW = x.shape
+            
+            x = x.reshape(B,L,self.final_feature_map[0],self.storm_dim*self.storm_dim)
+        
+        x = self.fc1(x)
+        x = self.relu1(self.bn1(self.deconv1(x)))
+        x = self.relu2()
+           
+        
 class DistHead(nn.Module):
     '''
     Dist: abbreviation of distribution
@@ -373,7 +395,9 @@ class DistHead(nn.Module):
         return logits
 
     def forward_post(self, x):
+        print(x.shape)
         logits = self.post_head(x)
+        print(logits.shape)
         logits = rearrange(logits, "B L (K C) -> B L K C", K=self.stoch_dim)
         logits = self.unimix(logits)
         return logits
@@ -661,216 +685,216 @@ class TerminationDecoder(nn.Module):
         termination = termination.squeeze(-1)  # remove last 1 dim
         return termination
 
-class WorldModel(nn.Module):
-    def __init__(self, in_channels, action_dim,
-                 transformer_max_length, transformer_hidden_dim, transformer_num_layers, transformer_num_heads):
-        super().__init__()
-        self.transformer_hidden_dim = transformer_hidden_dim
-        self.final_feature_width = 4
-        self.stoch_dim = 32
-        self.stoch_flattened_dim = self.stoch_dim*self.stoch_dim
-        self.use_amp = True
-        self.tensor_dtype = torch.bfloat16 if self.use_amp else torch.float32
-        self.imagine_batch_size = -1
-        self.imagine_batch_length = -1
+# class WorldModel(nn.Module):
+#     def __init__(self, in_channels, action_dim,
+#                  transformer_max_length, transformer_hidden_dim, transformer_num_layers, transformer_num_heads):
+#         super().__init__()
+#         self.transformer_hidden_dim = transformer_hidden_dim
+#         self.final_feature_width = 4
+#         self.stoch_dim = 32
+#         self.stoch_flattened_dim = self.stoch_dim*self.stoch_dim
+#         self.use_amp = True
+#         self.tensor_dtype = torch.bfloat16 if self.use_amp else torch.float32
+#         self.imagine_batch_size = -1
+#         self.imagine_batch_length = -1
 
-        self.encoder = EncoderBN(
-            in_channels=in_channels,
-            stem_channels=32,
-            final_feature_width=self.final_feature_width
-        )
-        self.storm_transformer = StochasticTransformerKVCache(
-            stoch_dim=self.stoch_flattened_dim,
-            action_dim=action_dim,
-            feat_dim=transformer_hidden_dim,
-            num_layers=transformer_num_layers,
-            num_heads=transformer_num_heads,
-            max_length=transformer_max_length,
-            dropout=0.1
-        )
-        self.dist_head = DistHead(
-            image_feat_dim=self.encoder.last_channels*self.final_feature_width*self.final_feature_width,
-            transformer_hidden_dim=transformer_hidden_dim,
-            stoch_dim=self.stoch_dim
-        )
-        self.image_decoder = DecoderBN(
-            stoch_dim=self.stoch_flattened_dim,
-            last_channels=self.encoder.last_channels,
-            original_in_channels=in_channels,
-            stem_channels=32,
-            final_feature_width=self.final_feature_width
-        )
-        self.reward_decoder = RewardDecoder(
-            num_classes=255,
-            embedding_size=self.stoch_flattened_dim,
-            transformer_hidden_dim=transformer_hidden_dim
-        )
-        self.termination_decoder = TerminationDecoder(
-            embedding_size=self.stoch_flattened_dim,
-            transformer_hidden_dim=transformer_hidden_dim
-        )
+#         self.encoder = EncoderBN(
+#             in_channels=in_channels,
+#             stem_channels=32,
+#             final_feature_width=self.final_feature_width
+#         )
+#         self.storm_transformer = StochasticTransformerKVCache(
+#             stoch_dim=self.stoch_flattened_dim,
+#             action_dim=action_dim,
+#             feat_dim=transformer_hidden_dim,
+#             num_layers=transformer_num_layers,
+#             num_heads=transformer_num_heads,
+#             max_length=transformer_max_length,
+#             dropout=0.1
+#         )
+#         self.dist_head = DistHead(
+#             image_feat_dim=self.encoder.last_channels*self.final_feature_width*self.final_feature_width,
+#             transformer_hidden_dim=transformer_hidden_dim,
+#             stoch_dim=self.stoch_dim
+#         )
+#         self.image_decoder = DecoderBN(
+#             stoch_dim=self.stoch_flattened_dim,
+#             last_channels=self.encoder.last_channels,
+#             original_in_channels=in_channels,
+#             stem_channels=32,
+#             final_feature_width=self.final_feature_width
+#         )
+#         self.reward_decoder = RewardDecoder(
+#             num_classes=255,
+#             embedding_size=self.stoch_flattened_dim,
+#             transformer_hidden_dim=transformer_hidden_dim
+#         )
+#         self.termination_decoder = TerminationDecoder(
+#             embedding_size=self.stoch_flattened_dim,
+#             transformer_hidden_dim=transformer_hidden_dim
+#         )
 
-        self.mse_loss_func = MSELoss()
-        self.ce_loss = nn.CrossEntropyLoss()
-        self.bce_with_logits_loss_func = nn.BCEWithLogitsLoss()
-        self.symlog_twohot_loss_func = SymLogTwoHotLoss(num_classes=255, lower_bound=-20, upper_bound=20)
-        self.categorical_kl_div_loss = CategoricalKLDivLossWithFreeBits(free_bits=1)
-        self.optimizer = torch.optim.Adam(self.parameters(), lr=1e-4)
-        self.scaler = torch.cuda.amp.GradScaler(enabled=self.use_amp)
+#         self.mse_loss_func = MSELoss()
+#         self.ce_loss = nn.CrossEntropyLoss()
+#         self.bce_with_logits_loss_func = nn.BCEWithLogitsLoss()
+#         self.symlog_twohot_loss_func = SymLogTwoHotLoss(num_classes=255, lower_bound=-20, upper_bound=20)
+#         self.categorical_kl_div_loss = CategoricalKLDivLossWithFreeBits(free_bits=1)
+#         self.optimizer = torch.optim.Adam(self.parameters(), lr=1e-4)
+#         self.scaler = torch.cuda.amp.GradScaler(enabled=self.use_amp)
 
-    def encode_obs(self, obs):
-        with torch.autocast(device_type='cuda', dtype=torch.bfloat16, enabled=self.use_amp):
-            embedding = self.encoder(obs)
-            post_logits = self.dist_head.forward_post(embedding)
-            sample = self.stright_throught_gradient(post_logits, sample_mode="random_sample")
-            flattened_sample = self.flatten_sample(sample)
-        return flattened_sample
+#     def encode_obs(self, obs):
+#         with torch.autocast(device_type='cuda', dtype=torch.bfloat16, enabled=self.use_amp):
+#             embedding = self.encoder(obs)
+#             post_logits = self.dist_head.forward_post(embedding)
+#             sample = self.stright_throught_gradient(post_logits, sample_mode="random_sample")
+#             flattened_sample = self.flatten_sample(sample)
+#         return flattened_sample
 
-    def calc_last_dist_feat(self, latent, action):
-        with torch.autocast(device_type='cuda', dtype=torch.bfloat16, enabled=self.use_amp):
-            temporal_mask = get_subsequent_mask(latent)
-            dist_feat = self.storm_transformer(latent, action, temporal_mask)
-            last_dist_feat = dist_feat[:, -1:]
-            prior_logits = self.dist_head.forward_prior(last_dist_feat)
-            prior_sample = self.stright_throught_gradient(prior_logits, sample_mode="random_sample")
-            prior_flattened_sample = self.flatten_sample(prior_sample)
-        return prior_flattened_sample, last_dist_feat
+#     def calc_last_dist_feat(self, latent, action):
+#         with torch.autocast(device_type='cuda', dtype=torch.bfloat16, enabled=self.use_amp):
+#             temporal_mask = get_subsequent_mask(latent)
+#             dist_feat = self.storm_transformer(latent, action, temporal_mask)
+#             last_dist_feat = dist_feat[:, -1:]
+#             prior_logits = self.dist_head.forward_prior(last_dist_feat)
+#             prior_sample = self.stright_throught_gradient(prior_logits, sample_mode="random_sample")
+#             prior_flattened_sample = self.flatten_sample(prior_sample)
+#         return prior_flattened_sample, last_dist_feat
 
-    def predict_next(self, last_flattened_sample, action, log_video=True):
-        with torch.autocast(device_type='cuda', dtype=torch.bfloat16, enabled=self.use_amp):
-            dist_feat = self.storm_transformer.forward_with_kv_cache(last_flattened_sample, action)
-            prior_logits = self.dist_head.forward_prior(dist_feat)
+#     def predict_next(self, last_flattened_sample, action, log_video=True):
+#         with torch.autocast(device_type='cuda', dtype=torch.bfloat16, enabled=self.use_amp):
+#             dist_feat = self.storm_transformer.forward_with_kv_cache(last_flattened_sample, action)
+#             prior_logits = self.dist_head.forward_prior(dist_feat)
 
-            # decoding
-            prior_sample = self.stright_throught_gradient(prior_logits, sample_mode="random_sample")
-            prior_flattened_sample = self.flatten_sample(prior_sample)
-            if log_video:
-                obs_hat = self.image_decoder(prior_flattened_sample)
-            else:
-                obs_hat = None
-            reward_hat = self.reward_decoder(dist_feat)
-            reward_hat = self.symlog_twohot_loss_func.decode(reward_hat)
-            termination_hat = self.termination_decoder(dist_feat)
-            termination_hat = termination_hat > 0
+#             # decoding
+#             prior_sample = self.stright_throught_gradient(prior_logits, sample_mode="random_sample")
+#             prior_flattened_sample = self.flatten_sample(prior_sample)
+#             if log_video:
+#                 obs_hat = self.image_decoder(prior_flattened_sample)
+#             else:
+#                 obs_hat = None
+#             reward_hat = self.reward_decoder(dist_feat)
+#             reward_hat = self.symlog_twohot_loss_func.decode(reward_hat)
+#             termination_hat = self.termination_decoder(dist_feat)
+#             termination_hat = termination_hat > 0
 
-        return obs_hat, reward_hat, termination_hat, prior_flattened_sample, dist_feat
+#         return obs_hat, reward_hat, termination_hat, prior_flattened_sample, dist_feat
 
-    def stright_throught_gradient(self, logits, sample_mode="random_sample"):
-        dist = OneHotCategorical(logits=logits)
-        if sample_mode == "random_sample":
-            sample = dist.sample() + dist.probs - dist.probs.detach()
-        elif sample_mode == "mode":
-            sample = dist.mode
-        elif sample_mode == "probs":
-            sample = dist.probs
-        return sample
+#     def stright_throught_gradient(self, logits, sample_mode="random_sample"):
+#         dist = OneHotCategorical(logits=logits)
+#         if sample_mode == "random_sample":
+#             sample = dist.sample() + dist.probs - dist.probs.detach()
+#         elif sample_mode == "mode":
+#             sample = dist.mode
+#         elif sample_mode == "probs":
+#             sample = dist.probs
+#         return sample
 
-    def flatten_sample(self, sample):
-        return rearrange(sample, "B L K C -> B L (K C)")
+#     def flatten_sample(self, sample):
+#         return rearrange(sample, "B L K C -> B L (K C)")
 
-    def init_imagine_buffer(self, imagine_batch_size, imagine_batch_length, dtype):
-        '''
-        This can slightly improve the efficiency of imagine_data
-        But may vary across different machines
-        '''
-        if self.imagine_batch_size != imagine_batch_size or self.imagine_batch_length != imagine_batch_length:
-            print(f"init_imagine_buffer: {imagine_batch_size}x{imagine_batch_length}@{dtype}")
-            self.imagine_batch_size = imagine_batch_size
-            self.imagine_batch_length = imagine_batch_length
-            latent_size = (imagine_batch_size, imagine_batch_length+1, self.stoch_flattened_dim)
-            hidden_size = (imagine_batch_size, imagine_batch_length+1, self.transformer_hidden_dim)
-            scalar_size = (imagine_batch_size, imagine_batch_length)
-            self.latent_buffer = torch.zeros(latent_size, dtype=dtype, device="cuda")
-            self.hidden_buffer = torch.zeros(hidden_size, dtype=dtype, device="cuda")
-            self.action_buffer = torch.zeros(scalar_size, dtype=dtype, device="cuda")
-            self.reward_hat_buffer = torch.zeros(scalar_size, dtype=dtype, device="cuda")
-            self.termination_hat_buffer = torch.zeros(scalar_size, dtype=dtype, device="cuda")
+#     def init_imagine_buffer(self, imagine_batch_size, imagine_batch_length, dtype):
+#         '''
+#         This can slightly improve the efficiency of imagine_data
+#         But may vary across different machines
+#         '''
+#         if self.imagine_batch_size != imagine_batch_size or self.imagine_batch_length != imagine_batch_length:
+#             print(f"init_imagine_buffer: {imagine_batch_size}x{imagine_batch_length}@{dtype}")
+#             self.imagine_batch_size = imagine_batch_size
+#             self.imagine_batch_length = imagine_batch_length
+#             latent_size = (imagine_batch_size, imagine_batch_length+1, self.stoch_flattened_dim)
+#             hidden_size = (imagine_batch_size, imagine_batch_length+1, self.transformer_hidden_dim)
+#             scalar_size = (imagine_batch_size, imagine_batch_length)
+#             self.latent_buffer = torch.zeros(latent_size, dtype=dtype, device="cuda")
+#             self.hidden_buffer = torch.zeros(hidden_size, dtype=dtype, device="cuda")
+#             self.action_buffer = torch.zeros(scalar_size, dtype=dtype, device="cuda")
+#             self.reward_hat_buffer = torch.zeros(scalar_size, dtype=dtype, device="cuda")
+#             self.termination_hat_buffer = torch.zeros(scalar_size, dtype=dtype, device="cuda")
 
-    def imagine_data(self, agent: agents.ActorCriticAgent, sample_obs, sample_action,
-                     imagine_batch_size, imagine_batch_length, log_video, logger):
-        self.init_imagine_buffer(imagine_batch_size, imagine_batch_length, dtype=self.tensor_dtype)
-        obs_hat_list = []
+#     def imagine_data(self, agent: ActorCriticAgent, sample_obs, sample_action,
+#                      imagine_batch_size, imagine_batch_length, log_video, logger):
+#         self.init_imagine_buffer(imagine_batch_size, imagine_batch_length, dtype=self.tensor_dtype)
+#         obs_hat_list = []
 
-        self.storm_transformer.reset_kv_cache_list(imagine_batch_size, dtype=self.tensor_dtype)
-        # context
-        context_latent = self.encode_obs(sample_obs)
-        for i in range(sample_obs.shape[1]):  # context_length is sample_obs.shape[1]
-            last_obs_hat, last_reward_hat, last_termination_hat, last_latent, last_dist_feat = self.predict_next(
-                context_latent[:, i:i+1],
-                sample_action[:, i:i+1],
-                log_video=log_video
-            )
-        self.latent_buffer[:, 0:1] = last_latent
-        self.hidden_buffer[:, 0:1] = last_dist_feat
+#         self.storm_transformer.reset_kv_cache_list(imagine_batch_size, dtype=self.tensor_dtype)
+#         # context
+#         context_latent = self.encode_obs(sample_obs)
+#         for i in range(sample_obs.shape[1]):  # context_length is sample_obs.shape[1]
+#             last_obs_hat, last_reward_hat, last_termination_hat, last_latent, last_dist_feat = self.predict_next(
+#                 context_latent[:, i:i+1],
+#                 sample_action[:, i:i+1],
+#                 log_video=log_video
+#             )
+#         self.latent_buffer[:, 0:1] = last_latent
+#         self.hidden_buffer[:, 0:1] = last_dist_feat
 
-        # imagine
-        for i in range(imagine_batch_length):
-            action = agent.sample(torch.cat([self.latent_buffer[:, i:i+1], self.hidden_buffer[:, i:i+1]], dim=-1))
-            self.action_buffer[:, i:i+1] = action
+#         # imagine
+#         for i in range(imagine_batch_length):
+#             action = agent.sample(torch.cat([self.latent_buffer[:, i:i+1], self.hidden_buffer[:, i:i+1]], dim=-1))
+#             self.action_buffer[:, i:i+1] = action
 
-            last_obs_hat, last_reward_hat, last_termination_hat, last_latent, last_dist_feat = self.predict_next(
-                self.latent_buffer[:, i:i+1], self.action_buffer[:, i:i+1], log_video=log_video)
+#             last_obs_hat, last_reward_hat, last_termination_hat, last_latent, last_dist_feat = self.predict_next(
+#                 self.latent_buffer[:, i:i+1], self.action_buffer[:, i:i+1], log_video=log_video)
 
-            self.latent_buffer[:, i+1:i+2] = last_latent
-            self.hidden_buffer[:, i+1:i+2] = last_dist_feat
-            self.reward_hat_buffer[:, i:i+1] = last_reward_hat
-            self.termination_hat_buffer[:, i:i+1] = last_termination_hat
-            if log_video:
-                obs_hat_list.append(last_obs_hat[::imagine_batch_size//16])  # uniform sample vec_env
+#             self.latent_buffer[:, i+1:i+2] = last_latent
+#             self.hidden_buffer[:, i+1:i+2] = last_dist_feat
+#             self.reward_hat_buffer[:, i:i+1] = last_reward_hat
+#             self.termination_hat_buffer[:, i:i+1] = last_termination_hat
+#             if log_video:
+#                 obs_hat_list.append(last_obs_hat[::imagine_batch_size//16])  # uniform sample vec_env
 
-        if log_video:
-            logger.log("Imagine/predict_video", torch.clamp(torch.cat(obs_hat_list, dim=1), 0, 1).cpu().float().detach().numpy())
+#         if log_video:
+#             logger.log("Imagine/predict_video", torch.clamp(torch.cat(obs_hat_list, dim=1), 0, 1).cpu().float().detach().numpy())
 
-        return torch.cat([self.latent_buffer, self.hidden_buffer], dim=-1), self.action_buffer, self.reward_hat_buffer, self.termination_hat_buffer
+#         return torch.cat([self.latent_buffer, self.hidden_buffer], dim=-1), self.action_buffer, self.reward_hat_buffer, self.termination_hat_buffer
 
-    def update(self, obs, action, reward, termination, logger=None):
-        self.train()
-        batch_size, batch_length = obs.shape[:2]
+#     def update(self, obs, action, reward, termination, logger=None):
+#         self.train()
+#         batch_size, batch_length = obs.shape[:2]
 
-        with torch.autocast(device_type='cuda', dtype=torch.bfloat16, enabled=self.use_amp):
-            # encoding
-            embedding = self.encoder(obs)
-            post_logits = self.dist_head.forward_post(embedding)
-            sample = self.stright_throught_gradient(post_logits, sample_mode="random_sample")
-            flattened_sample = self.flatten_sample(sample)
+#         with torch.autocast(device_type='cuda', dtype=torch.bfloat16, enabled=self.use_amp):
+#             # encoding
+#             embedding = self.encoder(obs)
+#             post_logits = self.dist_head.forward_post(embedding)
+#             sample = self.stright_throught_gradient(post_logits, sample_mode="random_sample")
+#             flattened_sample = self.flatten_sample(sample)
 
-            # decoding image
-            obs_hat = self.image_decoder(flattened_sample)
+#             # decoding image
+#             obs_hat = self.image_decoder(flattened_sample)
 
-            # transformer
-            temporal_mask = get_subsequent_mask_with_batch_length(batch_length, flattened_sample.device)
-            dist_feat = self.storm_transformer(flattened_sample, action, temporal_mask)
-            prior_logits = self.dist_head.forward_prior(dist_feat)
-            # decoding reward and termination with dist_feat
-            reward_hat = self.reward_decoder(dist_feat)
-            termination_hat = self.termination_decoder(dist_feat)
+#             # transformer
+#             temporal_mask = get_subsequent_mask_with_batch_length(batch_length, flattened_sample.device)
+#             dist_feat = self.storm_transformer(flattened_sample, action, temporal_mask)
+#             prior_logits = self.dist_head.forward_prior(dist_feat)
+#             # decoding reward and termination with dist_feat
+#             reward_hat = self.reward_decoder(dist_feat)
+#             termination_hat = self.termination_decoder(dist_feat)
 
-            # env loss
-            reconstruction_loss = self.mse_loss_func(obs_hat, obs)
-            reward_loss = self.symlog_twohot_loss_func(reward_hat, reward)
-            termination_loss = self.bce_with_logits_loss_func(termination_hat, termination)
-            # dyn-rep loss
-            dynamics_loss, dynamics_real_kl_div = self.categorical_kl_div_loss(post_logits[:, 1:].detach(), prior_logits[:, :-1])
-            representation_loss, representation_real_kl_div = self.categorical_kl_div_loss(post_logits[:, 1:], prior_logits[:, :-1].detach())
-            total_loss = reconstruction_loss + reward_loss + termination_loss + 0.5*dynamics_loss + 0.1*representation_loss
+#             # env loss
+#             reconstruction_loss = self.mse_loss_func(obs_hat, obs)
+#             reward_loss = self.symlog_twohot_loss_func(reward_hat, reward)
+#             termination_loss = self.bce_with_logits_loss_func(termination_hat, termination)
+#             # dyn-rep loss
+#             dynamics_loss, dynamics_real_kl_div = self.categorical_kl_div_loss(post_logits[:, 1:].detach(), prior_logits[:, :-1])
+#             representation_loss, representation_real_kl_div = self.categorical_kl_div_loss(post_logits[:, 1:], prior_logits[:, :-1].detach())
+#             total_loss = reconstruction_loss + reward_loss + termination_loss + 0.5*dynamics_loss + 0.1*representation_loss
 
-        # gradient descent
-        self.scaler.scale(total_loss).backward()
-        self.scaler.unscale_(self.optimizer)  # for clip grad
-        torch.nn.utils.clip_grad_norm_(self.parameters(), max_norm=1000.0)
-        self.scaler.step(self.optimizer)
-        self.scaler.update()
-        self.optimizer.zero_grad(set_to_none=True)
+#         # gradient descent
+#         self.scaler.scale(total_loss).backward()
+#         self.scaler.unscale_(self.optimizer)  # for clip grad
+#         torch.nn.utils.clip_grad_norm_(self.parameters(), max_norm=1000.0)
+#         self.scaler.step(self.optimizer)
+#         self.scaler.update()
+#         self.optimizer.zero_grad(set_to_none=True)
 
-        if logger is not None:
-            logger.log("WorldModel/reconstruction_loss", reconstruction_loss.item())
-            logger.log("WorldModel/reward_loss", reward_loss.item())
-            logger.log("WorldModel/termination_loss", termination_loss.item())
-            logger.log("WorldModel/dynamics_loss", dynamics_loss.item())
-            logger.log("WorldModel/dynamics_real_kl_div", dynamics_real_kl_div.item())
-            logger.log("WorldModel/representation_loss", representation_loss.item())
-            logger.log("WorldModel/representation_real_kl_div", representation_real_kl_div.item())
-            logger.log("WorldModel/total_loss", total_loss.item())
+#         if logger is not None:
+#             logger.log("WorldModel/reconstruction_loss", reconstruction_loss.item())
+#             logger.log("WorldModel/reward_loss", reward_loss.item())
+#             logger.log("WorldModel/termination_loss", termination_loss.item())
+#             logger.log("WorldModel/dynamics_loss", dynamics_loss.item())
+#             logger.log("WorldModel/dynamics_real_kl_div", dynamics_real_kl_div.item())
+#             logger.log("WorldModel/representation_loss", representation_loss.item())
+#             logger.log("WorldModel/representation_real_kl_div", representation_real_kl_div.item())
+#             logger.log("WorldModel/total_loss", total_loss.item())
 
 class EMAScalar:
     def __init__(self, decay) -> None:
@@ -1048,169 +1072,174 @@ class Logger():
         else:
             self.writer.add_scalar(tag, value, self.tag_step[tag])
             
-def train_world_model_step(replay_buffer: ReplayBuffer, world_model: WorldModel, batch_size, demonstration_batch_size, batch_length, logger):
-    obs, action, reward, termination = replay_buffer.sample(batch_size, demonstration_batch_size, batch_length)
-    world_model.update(obs, action, reward, termination, logger=logger)
+# def train_world_model_step(replay_buffer: ReplayBuffer, world_model: WorldModel, batch_size, demonstration_batch_size, batch_length, logger):
+#     obs, action, reward, termination = replay_buffer.sample(batch_size, demonstration_batch_size, batch_length)
+#     world_model.update(obs, action, reward, termination, logger=logger)
 
 
-@torch.no_grad()
-def world_model_imagine_data(replay_buffer: ReplayBuffer,
-                             world_model: WorldModel, agent: agents.ActorCriticAgent,
-                             imagine_batch_size, imagine_demonstration_batch_size,
-                             imagine_context_length, imagine_batch_length,
-                             log_video, logger):
-    '''
-    Sample context from replay buffer, then imagine data with world model and agent
-    '''
-    world_model.eval()
-    agent.eval()
+# @torch.no_grad()
+# def world_model_imagine_data(replay_buffer: ReplayBuffer,
+#                              world_model: WorldModel, agent: agents.ActorCriticAgent,
+#                              imagine_batch_size, imagine_demonstration_batch_size,
+#                              imagine_context_length, imagine_batch_length,
+#                              log_video, logger):
+#     '''
+#     Sample context from replay buffer, then imagine data with world model and agent
+#     '''
+#     world_model.eval()
+#     agent.eval()
 
-    sample_obs, sample_action, sample_reward, sample_termination = replay_buffer.sample(
-        imagine_batch_size, imagine_demonstration_batch_size, imagine_context_length)
-    latent, action, reward_hat, termination_hat = world_model.imagine_data(
-        agent, sample_obs, sample_action,
-        imagine_batch_size=imagine_batch_size+imagine_demonstration_batch_size,
-        imagine_batch_length=imagine_batch_length,
-        log_video=log_video,
-        logger=logger
-    )
-    return latent, action, None, None, reward_hat, termination_hat
-
-
-def joint_train_world_model_agent(env_name, max_steps, num_envs, image_size,
-                                  replay_buffer: ReplayBuffer,
-                                  world_model: WorldModel, agent: agents.ActorCriticAgent,
-                                  train_dynamics_every_steps, train_agent_every_steps,
-                                  batch_size, demonstration_batch_size, batch_length,
-                                  imagine_batch_size, imagine_demonstration_batch_size,
-                                  imagine_context_length, imagine_batch_length,
-                                  save_every_steps, seed, logger):
-    # create ckpt dir
-    os.makedirs(f"ckpt/{args.n}", exist_ok=True)
-
-    # build vec env, not useful in the Atari100k setting
-    # but when the max_steps is large, you can use parallel envs to speed up
-    vec_env = build_vec_env(env_name, image_size, num_envs=num_envs, seed=seed)
-    print("Current env: " + colorama.Fore.YELLOW + f"{env_name}" + colorama.Style.RESET_ALL)
-
-    # reset envs and variables
-    sum_reward = np.zeros(num_envs)
-    current_obs, current_info = vec_env.reset()
-    context_obs = deque(maxlen=16)
-    context_action = deque(maxlen=16)
-
-    # sample and train
-    for total_steps in tqdm(range(max_steps//num_envs)):
-        # sample part >>>
-        if replay_buffer.ready():
-            world_model.eval()
-            agent.eval()
-            with torch.no_grad():
-                if len(context_action) == 0:
-                    action = vec_env.action_space.sample()
-                else:
-                    context_latent = world_model.encode_obs(torch.cat(list(context_obs), dim=1))
-                    model_context_action = np.stack(list(context_action), axis=1)
-                    model_context_action = torch.Tensor(model_context_action).cuda()
-                    prior_flattened_sample, last_dist_feat = world_model.calc_last_dist_feat(context_latent, model_context_action)
-                    action = agent.sample_as_env_action(
-                        torch.cat([prior_flattened_sample, last_dist_feat], dim=-1),
-                        greedy=False
-                    )
-
-            context_obs.append(rearrange(torch.Tensor(current_obs).cuda(), "B H W C -> B 1 C H W")/255)
-            context_action.append(action)
-        else:
-            action = vec_env.action_space.sample()
-
-        obs, reward, done, truncated, info = vec_env.step(action)
-        replay_buffer.append(current_obs, action, reward, np.logical_or(done, info["life_loss"]))
-
-        done_flag = np.logical_or(done, truncated)
-        if done_flag.any():
-            for i in range(num_envs):
-                if done_flag[i]:
-                    logger.log(f"sample/{env_name}_reward", sum_reward[i])
-                    logger.log(f"sample/{env_name}_episode_steps", current_info["episode_frame_number"][i]//4)  # framskip=4
-                    logger.log("replay_buffer/length", len(replay_buffer))
-                    sum_reward[i] = 0
-
-        # update current_obs, current_info and sum_reward
-        sum_reward += reward
-        current_obs = obs
-        current_info = info
-        # <<< sample part
-
-        # train world model part >>>
-        if replay_buffer.ready() and total_steps % (train_dynamics_every_steps//num_envs) == 0:
-            train_world_model_step(
-                replay_buffer=replay_buffer,
-                world_model=world_model,
-                batch_size=batch_size,
-                demonstration_batch_size=demonstration_batch_size,
-                batch_length=batch_length,
-                logger=logger
-            )
-        # <<< train world model part
-
-        # train agent part >>>
-        if replay_buffer.ready() and total_steps % (train_agent_every_steps//num_envs) == 0 and total_steps*num_envs >= 0:
-            if total_steps % (save_every_steps//num_envs) == 0:
-                log_video = True
-            else:
-                log_video = False
-
-            imagine_latent, agent_action, agent_logprob, agent_value, imagine_reward, imagine_termination = world_model_imagine_data(
-                replay_buffer=replay_buffer,
-                world_model=world_model,
-                agent=agent,
-                imagine_batch_size=imagine_batch_size,
-                imagine_demonstration_batch_size=imagine_demonstration_batch_size,
-                imagine_context_length=imagine_context_length,
-                imagine_batch_length=imagine_batch_length,
-                log_video=log_video,
-                logger=logger
-            )
-
-            agent.update(
-                latent=imagine_latent,
-                action=agent_action,
-                old_logprob=agent_logprob,
-                old_value=agent_value,
-                reward=imagine_reward,
-                termination=imagine_termination,
-                logger=logger
-            )
-        # <<< train agent part
-
-        # save model per episode
-        if total_steps % (save_every_steps//num_envs) == 0:
-            print(colorama.Fore.GREEN + f"Saving model at total steps {total_steps}" + colorama.Style.RESET_ALL)
-            torch.save(world_model.state_dict(), f"ckpt/{args.n}/world_model_{total_steps}.pth")
-            torch.save(agent.state_dict(), f"ckpt/{args.n}/agent_{total_steps}.pth")
+#     sample_obs, sample_action, sample_reward, sample_termination = replay_buffer.sample(
+#         imagine_batch_size, imagine_demonstration_batch_size, imagine_context_length)
+#     latent, action, reward_hat, termination_hat = world_model.imagine_data(
+#         agent, sample_obs, sample_action,
+#         imagine_batch_size=imagine_batch_size+imagine_demonstration_batch_size,
+#         imagine_batch_length=imagine_batch_length,
+#         log_video=log_video,
+#         logger=logger
+#     )
+#     return latent, action, None, None, reward_hat, termination_hat
 
 
-def build_world_model(conf, action_dim):
-    return WorldModel(
-        in_channels=conf.Models.WorldModel.InChannels,
-        action_dim=action_dim,
-        transformer_max_length=conf.Models.WorldModel.TransformerMaxLength,
-        transformer_hidden_dim=conf.Models.WorldModel.TransformerHiddenDim,
-        transformer_num_layers=conf.Models.WorldModel.TransformerNumLayers,
-        transformer_num_heads=conf.Models.WorldModel.TransformerNumHeads
-    ).cuda()
+# def joint_train_world_model_agent(env_name, max_steps, num_envs, image_size,
+#                                   replay_buffer: ReplayBuffer,
+#                                   world_model: WorldModel, agent: agents.ActorCriticAgent,
+#                                   train_dynamics_every_steps, train_agent_every_steps,
+#                                   batch_size, demonstration_batch_size, batch_length,
+#                                   imagine_batch_size, imagine_demonstration_batch_size,
+#                                   imagine_context_length, imagine_batch_length,
+#                                   save_every_steps, seed, logger):
+#     # create ckpt dir
+#     os.makedirs(f"ckpt/{args.n}", exist_ok=True)
+
+#     # build vec env, not useful in the Atari100k setting
+#     # but when the max_steps is large, you can use parallel envs to speed up
+#     vec_env = build_vec_env(env_name, image_size, num_envs=num_envs, seed=seed)
+#     print("Current env: " + colorama.Fore.YELLOW + f"{env_name}" + colorama.Style.RESET_ALL)
+
+#     # reset envs and variables
+#     sum_reward = np.zeros(num_envs)
+#     current_obs, current_info = vec_env.reset()
+#     context_obs = deque(maxlen=16)
+#     context_action = deque(maxlen=16)
+
+#     # sample and train
+#     for total_steps in tqdm(range(max_steps//num_envs)):
+#         # sample part >>>
+#         if replay_buffer.ready():
+#             world_model.eval()
+#             agent.eval()
+#             with torch.no_grad():
+#                 if len(context_action) == 0:
+#                     action = vec_env.action_space.sample()
+#                 else:
+#                     context_latent = world_model.encode_obs(torch.cat(list(context_obs), dim=1))
+#                     model_context_action = np.stack(list(context_action), axis=1)
+#                     model_context_action = torch.Tensor(model_context_action).cuda()
+#                     prior_flattened_sample, last_dist_feat = world_model.calc_last_dist_feat(context_latent, model_context_action)
+#                     action = agent.sample_as_env_action(
+#                         torch.cat([prior_flattened_sample, last_dist_feat], dim=-1),
+#                         greedy=False
+#                     )
+
+#             context_obs.append(rearrange(torch.Tensor(current_obs).cuda(), "B H W C -> B 1 C H W")/255)
+#             context_action.append(action)
+#         else:
+#             action = vec_env.action_space.sample()
+
+#         obs, reward, done, truncated, info = vec_env.step(action)
+#         replay_buffer.append(current_obs, action, reward, np.logical_or(done, info["life_loss"]))
+
+#         done_flag = np.logical_or(done, truncated)
+#         if done_flag.any():
+#             for i in range(num_envs):
+#                 if done_flag[i]:
+#                     logger.log(f"sample/{env_name}_reward", sum_reward[i])
+#                     logger.log(f"sample/{env_name}_episode_steps", current_info["episode_frame_number"][i]//4)  # framskip=4
+#                     logger.log("replay_buffer/length", len(replay_buffer))
+#                     sum_reward[i] = 0
+
+#         # update current_obs, current_info and sum_reward
+#         sum_reward += reward
+#         current_obs = obs
+#         current_info = info
+
+#         # train world model part >>>
+#         if replay_buffer.ready() and total_steps % (train_dynamics_every_steps//num_envs) == 0:
+#             train_world_model_step(
+#                 replay_buffer=replay_buffer,
+#                 world_model=world_model,
+#                 batch_size=batch_size,
+#                 demonstration_batch_size=demonstration_batch_size,
+#                 batch_length=batch_length,
+#                 logger=logger
+#             )
+#         # <<< train world model part
+
+#         # train agent part >>>
+#         if replay_buffer.ready() and total_steps % (train_agent_every_steps//num_envs) == 0 and total_steps*num_envs >= 0:
+#             if total_steps % (save_every_steps//num_envs) == 0:
+#                 log_video = True
+#             else:
+#                 log_video = False
+
+#             imagine_latent, agent_action, agent_logprob, agent_value, imagine_reward, imagine_termination = world_model_imagine_data(
+#                 replay_buffer=replay_buffer,
+#                 world_model=world_model,
+#                 agent=agent,
+#                 imagine_batch_size=imagine_batch_size,
+#                 imagine_demonstration_batch_size=imagine_demonstration_batch_size,
+#                 imagine_context_length=imagine_context_length,
+#                 imagine_batch_length=imagine_batch_length,
+#                 log_video=log_video,
+#                 logger=logger
+#             )
+
+#             agent.update(
+#                 latent=imagine_latent,
+#                 action=agent_action,
+#                 old_logprob=agent_logprob,
+#                 old_value=agent_value,
+#                 reward=imagine_reward,
+#                 termination=imagine_termination,
+#                 logger=logger
+#             )
+#         # <<< train agent part
+
+#         # save model per episode
+#         if total_steps % (save_every_steps//num_envs) == 0:
+#             print(colorama.Fore.GREEN + f"Saving model at total steps {total_steps}" + colorama.Style.RESET_ALL)
+#             torch.save(world_model.state_dict(), f"ckpt/{args.n}/world_model_{total_steps}.pth")
+#             torch.save(agent.state_dict(), f"ckpt/{args.n}/agent_{total_steps}.pth")
 
 
-def build_agent(conf, action_dim):
-    return ActorCriticAgent(
-        feat_dim=32*32+conf.Models.WorldModel.TransformerHiddenDim,
-        num_layers=conf.Models.Agent.NumLayers,
-        hidden_dim=conf.Models.Agent.HiddenDim,
-        action_dim=action_dim,
-        gamma=conf.Models.Agent.Gamma,
-        lambd=conf.Models.Agent.Lambda,
-        entropy_coef=conf.Models.Agent.EntropyCoef,
-    ).cuda()
+# def build_world_model(conf, action_dim):
+#     return WorldModel(
+#         in_channels=conf.Models.WorldModel.InChannels,
+#         action_dim=action_dim,
+#         transformer_max_length=conf.Models.WorldModel.TransformerMaxLength,
+#         transformer_hidden_dim=conf.Models.WorldModel.TransformerHiddenDim,
+#         transformer_num_layers=conf.Models.WorldModel.TransformerNumLayers,
+#         transformer_num_heads=conf.Models.WorldModel.TransformerNumHeads
+#     ).cuda()
+
+
+# def build_agent(conf, action_dim):
+#     return ActorCriticAgent(
+#         feat_dim=32*32+conf.Models.WorldModel.TransformerHiddenDim,
+#         num_layers=conf.Models.Agent.NumLayers,
+#         hidden_dim=conf.Models.Agent.HiddenDim,
+#         action_dim=action_dim,
+#         gamma=conf.Models.Agent.Gamma,
+#         lambd=conf.Models.Agent.Lambda,
+#         entropy_coef=conf.Models.Agent.EntropyCoef,
+#     ).cuda()
     
 if __name__ == "__main__":
-    pass
+    image_feat_dim = 64
+    transformer_hidden_dim = 32
+    stoch_dim = 32
+    abaaba = DistHead(image_feat_dim,transformer_hidden_dim,stoch_dim)
+    test = torch.randn(1024,64,64)
+    
+    abaaba.forward_post(test)
