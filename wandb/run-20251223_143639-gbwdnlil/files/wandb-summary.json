@@ -1,0 +1,1 @@
+{"_step":1862,"value_loss":0.0001354579726466909,"train_player":"LEFT","_wandb":{"runtime":1998},"_runtime":1998,"reward_left":-3717,"entropy":2.21869158744812,"reward_right":-3717,"current_course":"D","_timestamp":1.7664722096900148e+09,"policy_loss":0.012544690631330013}

@@ -1,0 +1,7 @@
+No player1 checkpoint found, start training from scratch
+No player2 checkpoint found, start training from scratch
+Update the policy
+C:\Users\junmi\AppData\Local\Temp\ipykernel_20872\344561323.py:59: UserWarning: Creating a tensor from a list of numpy.ndarrays is extremely slow. Please consider converting the list to a single numpy.ndarray with numpy.array() before converting to a tensor. (Triggered internally at C:\actions-runner\_work\pytorch\pytorch\builder\windows\pytorch\torch\csrc\utils\tensor_new.cpp:281.)
+  obs = torch.tensor(buffer.obs, dtype=torch.float32, device=self.device)
+(4, 60, 138)
+[34m[1mwandb[0m: [32m[41mERROR[0m The nbformat package was not found. It is required to save notebook history.

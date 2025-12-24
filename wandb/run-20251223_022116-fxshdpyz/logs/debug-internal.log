@@ -1,0 +1,12 @@
+{"time":"2025-12-23T02:21:18.9553522+08:00","level":"INFO","msg":"stream: starting","core version":"0.23.1"}
+{"time":"2025-12-23T02:21:19.330656+08:00","level":"INFO","msg":"stream: created new stream","id":"fxshdpyz"}
+{"time":"2025-12-23T02:21:19.330656+08:00","level":"INFO","msg":"handler: started","stream_id":"fxshdpyz"}
+{"time":"2025-12-23T02:21:19.3337694+08:00","level":"INFO","msg":"stream: started","id":"fxshdpyz"}
+{"time":"2025-12-23T02:21:19.3337694+08:00","level":"INFO","msg":"sender: started","stream_id":"fxshdpyz"}
+{"time":"2025-12-23T02:21:19.3337694+08:00","level":"INFO","msg":"writer: started","stream_id":"fxshdpyz"}
+{"time":"2025-12-23T02:22:57.8168417+08:00","level":"INFO","msg":"fileTransfer: Close: file transfer manager closed"}
+{"time":"2025-12-23T02:22:58.1741756+08:00","level":"INFO","msg":"handler: operation stats","stats":{}}
+{"time":"2025-12-23T02:22:58.1879494+08:00","level":"INFO","msg":"stream: closing","id":"fxshdpyz"}
+{"time":"2025-12-23T02:22:58.1879494+08:00","level":"INFO","msg":"handler: closed","stream_id":"fxshdpyz"}
+{"time":"2025-12-23T02:22:58.1893486+08:00","level":"INFO","msg":"sender: closed","stream_id":"fxshdpyz"}
+{"time":"2025-12-23T02:22:58.1893486+08:00","level":"INFO","msg":"stream: closed","id":"fxshdpyz"}

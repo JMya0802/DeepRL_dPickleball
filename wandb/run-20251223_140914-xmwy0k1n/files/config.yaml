@@ -1,0 +1,53 @@
+_wandb:
+    value:
+        cli_version: 0.23.1
+        e:
+            tmzelsw3rx9m2w4l3ouctpzaj0m0anp8:
+                codePath: d:\AIT306_FinalProject\test.ipynb
+                codePathLocal: test.ipynb
+                cpu_count: 8
+                cpu_count_logical: 16
+                cudaVersion: "12.8"
+                disk:
+                    /:
+                        total: "1000186310656"
+                        used: "321627938816"
+                email: junmingya0802@gmail.com
+                executable: c:\Users\junmi\anaconda3\envs\dpickleball\python.exe
+                git:
+                    commit: 73556ee226fe6bf7a1aadb48b0c39f45198c8c30
+                    remote: https://github.com/JMya0802/DeepRL_dPickleball.git
+                gpu: NVIDIA GeForce RTX 3050 Laptop GPU
+                gpu_count: 1
+                gpu_nvidia:
+                    - architecture: Ampere
+                      cudaCores: 2048
+                      memoryTotal: "4294967296"
+                      name: NVIDIA GeForce RTX 3050 Laptop GPU
+                      uuid: GPU-8884671f-a9fa-8125-f314-c7b9f8a9e487
+                host: 是俊铭呀
+                memory:
+                    total: "33720848384"
+                os: Windows-10-10.0.26100-SP0
+                program: d:\AIT306_FinalProject\test.ipynb
+                python: CPython 3.10.18
+                root: d:\AIT306_FinalProject
+                startedAt: "2025-12-23T06:09:14.109850Z"
+                writerId: tmzelsw3rx9m2w4l3ouctpzaj0m0anp8
+        m: []
+        python_version: 3.10.18
+        t:
+            "1":
+                - 1
+            "2":
+                - 1
+            "3":
+                - 2
+                - 13
+            "4": 3.10.18
+            "5": 0.23.1
+            "8":
+                - 1
+                - 3
+            "12": 0.23.1
+            "13": windows-amd64
