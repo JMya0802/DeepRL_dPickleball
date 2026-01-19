@@ -3,8 +3,7 @@ _____
 
 The dPickleball Environment: https://github.com/dPickleball/dPickleBallEnv
 Our code provide some training strategy for dpickleball!
-
-_____
+___
 ### Training Strategy:
 1. Curriculum Learning 
 2. World Model 
