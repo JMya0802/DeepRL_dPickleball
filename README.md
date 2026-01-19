@@ -10,7 +10,7 @@ ___
 3. Parallel Env Training 
 4. Parallel Env + Currciculum Learning (the best)
 
-——————
+___
 ### Description of Training Strategy:
 1. Curriculum Learning: Once the specified score is reached, switch to the next course (alternate between left and right sides).
 2. World Model: Build an internal model so that the agent can be trained within the model.
