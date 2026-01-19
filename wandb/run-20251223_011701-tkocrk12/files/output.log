@@ -1,3 +1,0 @@
-No player1 checkpoint found, start training from scratch
-No player2 checkpoint found, start training from scratch
-deque([array([], shape=(84, 60, 0), dtype=float64), array([], shape=(84, 60, 0), dtype=float64), array([], shape=(84, 60, 0), dtype=float64), array([], shape=(84, 60, 0), dtype=float64)], maxlen=4)

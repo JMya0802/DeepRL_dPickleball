@@ -1,4 +1,0 @@
-No player1 checkpoint found, start training from scratch
-No player2 checkpoint found, start training from scratch
-torch.Size([1, 138, 4, 60])
-(4, 60, 138)

@@ -1,5 +1,0 @@
-No player1 checkpoint found, start training from scratch
-No player2 checkpoint found, start training from scratch
-(84, 60, 0)
-deque([array([], shape=(84, 60, 0), dtype=float64), array([], shape=(84, 60, 0), dtype=float64), array([], shape=(84, 60, 0), dtype=float64), array([], shape=(84, 60, 0), dtype=float64)], maxlen=4)
-[34m[1mwandb[0m: [32m[41mERROR[0m The nbformat package was not found. It is required to save notebook history.
